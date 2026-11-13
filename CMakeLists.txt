@@ -1,12 +1,17 @@
 cmake_minimum_required(VERSION 3.24)
 project(breakout LANGUAGES C CXX)
 
+# Compile as C++20, and fail rather than quietly fall back to an older
+# standard if the compiler doesn't support it.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Write compile_commands.json into the build folder. Tools like clangd and
+# clang-tidy read it to learn how each file is compiled.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Fetch raylib at configure time (no system install needed).
 include(FetchContent)
+# Skip raylib's example programs and games; we only need the library.
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
@@ -17,13 +22,30 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(raylib)
 
+# The game program. Only .cpp files are listed: each one is compiled on its
+# own, and headers are compiled as part of every .cpp file that includes them.
 add_executable(breakout
     src/main.cpp
+    src/brick.cpp
+    src/game.cpp
+    src/physics.cpp
 )
 
+# Link raylib into the game. Linking a CMake target like `raylib` also adds
+# its include folders, which is how `#include <raylib.h>` is found.
+#
+# PRIVATE means only `breakout` itself uses raylib. PUBLIC would also pass
+# raylib on to anything that links against `breakout`, and INTERFACE would
+# pass it on without using it ourselves. For a program that nothing links
+# against, PRIVATE is the right choice.
 target_link_libraries(breakout PRIVATE raylib)
+
+# -Wall and -Wextra turn on most useful compiler warnings. -Wpedantic warns
+# about compiler-specific extensions that aren't standard C++.
 target_compile_options(breakout PRIVATE -Wall -Wextra -Wpedantic)
 
+# macOS system frameworks raylib needs: windows (Cocoa), keyboard and
+# controller input (IOKit), graphics (OpenGL) and frame timing (CoreVideo).
 if (APPLE)
     target_link_libraries(breakout PRIVATE
         "-framework Cocoa" "-framework IOKit" "-framework OpenGL" "-framework CoreVideo")
