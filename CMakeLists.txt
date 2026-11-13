@@ -20,7 +20,19 @@ FetchContent_Declare(
     GIT_TAG 5.5
     GIT_SHALLOW TRUE
 )
+# raylib's CMakeLists.txt asks for a minimum CMake version below 3.10, which
+# makes newer CMake print a deprecation warning meant for raylib's own
+# developers. CMAKE_POLICY_VERSION_MINIMUM (CMake 4.0+) tells CMake to treat
+# that request as 3.10 instead, so the warning goes away. It is set only
+# while raylib is set up, then removed so it doesn't affect anything else.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 FetchContent_MakeAvailable(raylib)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
+
+# Build raylib's own source files with compiler warnings off (-w). They are
+# third-party code we don't change, so the build log only shows warnings
+# from this project's code.
+target_compile_options(raylib PRIVATE -w)
 
 # The game program. Only .cpp files are listed: each one is compiled on its
 # own, and headers are compiled as part of every .cpp file that includes them.
