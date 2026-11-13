@@ -21,6 +21,10 @@ constexpr float kBrickHeight = 20.0f;
 /// @brief Distance in pixels from the top of the window to the first row.
 constexpr float kBrickTop = 50.0f;
 
+/// @brief Largest angle, in degrees away from straight up, at which the ball
+/// can leave the paddle. Hitting the very edge of the paddle gives this angle.
+constexpr float kMaxBounceAngleDegrees = 60.0f;
+
 /// @brief One breakable brick in the grid.
 ///
 /// This is a plain aggregate (a struct with no constructors), so you can
@@ -108,6 +112,38 @@ Vector2 BounceOffRect(Vector2 ball, float radius, Rectangle rect,
   return velocity;
 }
 
+/// @brief Works out the ball's velocity after it hits the paddle.
+///
+/// Where the ball lands on the paddle sets the bounce angle, which lets the
+/// player aim. The centre sends the ball straight up, and the edges send it
+/// up to kMaxBounceAngleDegrees towards that side. The ball keeps its speed.
+///
+/// @param ball_x Horizontal position of the ball's centre.
+/// @param paddle The paddle the ball hit.
+/// @param velocity The ball's velocity before the bounce.
+/// @return The velocity after the bounce, always pointing upwards.
+Vector2 BounceOffPaddle(float ball_x, Rectangle paddle, Vector2 velocity) {
+  // `offset` is -1 at the paddle's left edge, 0 at its centre and +1 at its
+  // right edge. When the ball clips a corner its centre can be slightly past
+  // the edge, so std::clamp (C++17) keeps the value within -1 to +1.
+  const float half_width = paddle.width / 2;
+  const float paddle_center = paddle.x + half_width;
+  const float offset =
+      std::clamp((ball_x - paddle_center) / half_width, -1.0f, 1.0f);
+
+  // std::sin and std::cos work in radians. DEG2RAD is a raylib macro equal
+  // to PI / 180, which converts degrees to radians.
+  const float angle = offset * kMaxBounceAngleDegrees * DEG2RAD;
+
+  // std::hypot(x, y) is sqrt(x * x + y * y): the length of the velocity
+  // vector, which is the ball's speed.
+  const float speed = std::hypot(velocity.x, velocity.y);
+
+  // Split the speed into horizontal and vertical parts for the new angle.
+  // Screen y grows downwards, so a negative y velocity moves the ball up.
+  return Vector2{speed * std::sin(angle), -speed * std::cos(angle)};
+}
+
 /// @brief Opens the game window and runs the game loop until it is closed.
 /// @return 0 on a normal exit.
 int main() {
@@ -138,8 +174,12 @@ int main() {
     if (ball.x - kBallRadius < 0 || ball.x + kBallRadius > kScreenWidth)
       vel.x *= -1;
     if (ball.y - kBallRadius < 0) vel.y *= -1;
-    if (CheckCollisionCircleRec(ball, kBallRadius, paddle))
-      vel.y = -std::abs(vel.y);
+    // Only bounce while the ball is moving down. The ball can still overlap
+    // the paddle for a frame after bouncing, and without this check the
+    // bounce would be worked out again from a slightly different spot.
+    if (vel.y > 0 && CheckCollisionCircleRec(ball, kBallRadius, paddle)) {
+      vel = BounceOffPaddle(ball.x, paddle, vel);
+    }
 
     // `Brick&` is a reference to the brick inside the vector, so setting
     // `alive` changes the real brick. A plain `Brick` would be a copy, and the
