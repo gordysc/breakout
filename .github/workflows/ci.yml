@@ -17,20 +17,16 @@ permissions:
   contents: read
 
 jobs:
+  # Linux only: macOS runners cost far more Actions minutes.
   build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Build (Linux)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       # raylib builds its GLFW backend from source on Linux and needs the
-      # X11 and OpenGL development headers. macOS uses system frameworks.
+      # X11 and OpenGL development headers.
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
