@@ -39,6 +39,25 @@ constexpr int kPointsPerBrick = 10;
 /// @brief Font size in pixels for the score and lives display.
 constexpr int kHudFontSize = 20;
 
+/// @brief Which screen the game is on. Decides what each frame updates and
+/// draws.
+///
+/// `enum class` is the modern replacement for a plain `enum`. Its names are
+/// scoped (you write `GameState::kPlaying`, so they can't clash with other
+/// names like raylib's), and it never silently converts to an int.
+enum class GameState {
+  /// @brief Title screen, shown when the game starts.
+  kTitle,
+  /// @brief Normal play: the ball moves and bricks can break.
+  kPlaying,
+  /// @brief Play is frozen until the player unpauses.
+  kPaused,
+  /// @brief The player has lost their last life.
+  kGameOver,
+  /// @brief Every brick in the level is broken.
+  kLevelCleared,
+};
+
 /// @brief One breakable brick in the grid.
 ///
 /// This is a plain aggregate (a struct with no constructors), so you can
@@ -189,30 +208,66 @@ int main() {
   std::vector<Brick> bricks = MakeBricks();
   int score = 0;
   int lives = kStartingLives;
-  // True from losing the last life until the player starts a new game. The
-  // game states step will replace this with an `enum class GameState`.
-  bool game_over = false;
+  GameState state = GameState::kTitle;
+
+  // These are lambdas: small unnamed functions written inline. `[&]` captures
+  // the surrounding local variables by reference, so the lambda changes the
+  // real `ball`, `bricks` and so on in main(). That is safe here because the
+  // lambdas are only used inside main(), while those variables still exist. A
+  // lambda that captured by reference and outlived them would be left holding
+  // dangling references.
+  //
+  // A lambda's type has no name you can write, which is why `auto` is needed.
+  auto reset_ball = [&] {
+    ball = kBallStartPosition;
+    vel = kBallStartVelocity;
+  };
+  auto start_level = [&] {
+    paddle = kPaddleStart;
+    // MakeBricks() returns a temporary vector, so this is a move assignment:
+    // `bricks` takes over the new vector's memory and its old memory is freed
+    // automatically. Nothing is copied, and there is no manual cleanup.
+    bricks = MakeBricks();
+    reset_ball();
+  };
 
   while (!WindowShouldClose()) {
     const float dt = GetFrameTime();
 
-    if (game_over) {
-      // IsKeyPressed is true only on the frame the key goes down, unlike
-      // IsKeyDown, which stays true for as long as the key is held.
-      if (IsKeyPressed(KEY_SPACE)) {
-        paddle = kPaddleStart;
-        ball = kBallStartPosition;
-        vel = kBallStartVelocity;
-        // MakeBricks() returns a temporary vector, so this is a move
-        // assignment: `bricks` takes over the new vector's memory and its old
-        // memory is freed automatically. Nothing is copied, and there is no
-        // manual cleanup.
-        bricks = MakeBricks();
-        score = 0;
-        lives = kStartingLives;
-        game_over = false;
-      }
-    } else {
+    // --- Key presses that change the state ---
+    // IsKeyPressed is true only on the frame the key goes down, unlike
+    // IsKeyDown, which stays true for as long as the key is held.
+    //
+    // There is a `case` for every GameState and no `default`, so if a new
+    // state is added later, the compiler warns (-Wswitch) that it is missing.
+    switch (state) {
+      case GameState::kTitle:
+        if (IsKeyPressed(KEY_SPACE)) state = GameState::kPlaying;
+        break;
+      case GameState::kPlaying:
+        if (IsKeyPressed(KEY_P)) state = GameState::kPaused;
+        break;
+      case GameState::kPaused:
+        if (IsKeyPressed(KEY_P)) state = GameState::kPlaying;
+        break;
+      case GameState::kGameOver:
+        if (IsKeyPressed(KEY_SPACE)) {
+          score = 0;
+          lives = kStartingLives;
+          start_level();
+          state = GameState::kPlaying;
+        }
+        break;
+      case GameState::kLevelCleared:
+        // Score and lives carry over into the next level.
+        if (IsKeyPressed(KEY_SPACE)) {
+          start_level();
+          state = GameState::kPlaying;
+        }
+        break;
+    }
+
+    if (state == GameState::kPlaying) {
       // --- Input ---
       if (IsKeyDown(KEY_LEFT)) paddle.x -= kPaddleSpeed * dt;
       if (IsKeyDown(KEY_RIGHT)) paddle.x += kPaddleSpeed * dt;
@@ -254,43 +309,78 @@ int main() {
         break;
       }
 
+      // std::ranges::none_of (C++20) is true if the test is false for every
+      // brick. The test is a lambda with an empty capture list `[]`, because
+      // it only needs its own parameter, not any of main()'s variables.
+      if (std::ranges::none_of(
+              bricks, [](const Brick& brick) { return brick.alive; })) {
+        state = GameState::kLevelCleared;
+      }
+
       if (ball.y > kScreenHeight) {  // missed: lose a life
         --lives;
-        if (lives == 0) game_over = true;
-        ball = kBallStartPosition;
-        vel = kBallStartVelocity;
+        if (lives == 0) state = GameState::kGameOver;
+        reset_ball();
       }
     }
 
     // --- Draw ---
     BeginDrawing();
     ClearBackground(BLACK);
-    // `const Brick&` reads each brick without copying it, and the compiler
-    // stops us from changing it by accident.
-    for (const Brick& brick : bricks) {
-      if (brick.alive) DrawRectangleRec(brick.rect, brick.color);
-    }
-    DrawRectangleRec(paddle, WHITE);
-    // Hide the ball on the game over screen, where it would sit behind the
-    // text.
-    if (!game_over) DrawCircleV(ball, kBallRadius, RED);
 
-    // TextFormat works like printf: `%d` is replaced by an int argument. The
-    // placeholder must match the argument's type, or the behaviour is
-    // undefined. It returns a pointer into a small buffer that raylib owns
-    // and reuses on later calls, so use the text straight away and never keep
-    // the pointer.
-    DrawText(TextFormat("Score: %d", score), 10, 10, kHudFontSize, WHITE);
-    const char* lives_text = TextFormat("Lives: %d", lives);
-    DrawText(lives_text,
-             kScreenWidth - MeasureText(lives_text, kHudFontSize) - 10, 10,
-             kHudFontSize, WHITE);
+    if (state == GameState::kTitle) {
+      DrawCenteredText("BREAKOUT", 200, 60, WHITE);
+      DrawCenteredText("Press SPACE to start", 300, kHudFontSize, GRAY);
+      DrawCenteredText("Arrow keys move, P pauses", 330, kHudFontSize, GRAY);
+    } else {
+      // `const Brick&` reads each brick without copying it, and the compiler
+      // stops us from changing it by accident.
+      for (const Brick& brick : bricks) {
+        if (brick.alive) DrawRectangleRec(brick.rect, brick.color);
+      }
+      DrawRectangleRec(paddle, WHITE);
+      // The ball only matters during play. On the other screens it would sit
+      // behind the message text.
+      if (state == GameState::kPlaying || state == GameState::kPaused) {
+        DrawCircleV(ball, kBallRadius, RED);
+      }
 
-    if (game_over) {
-      DrawCenteredText("GAME OVER", 220, 40, RED);
-      DrawCenteredText(TextFormat("Final score: %d", score), 280, kHudFontSize,
-                       WHITE);
-      DrawCenteredText("Press SPACE to play again", 320, kHudFontSize, GRAY);
+      // TextFormat works like printf: `%d` is replaced by an int argument.
+      // The placeholder must match the argument's type, or the behaviour is
+      // undefined. It returns a pointer into a small buffer that raylib owns
+      // and reuses on later calls, so use the text straight away and never
+      // keep the pointer.
+      DrawText(TextFormat("Score: %d", score), 10, 10, kHudFontSize, WHITE);
+      const char* lives_text = TextFormat("Lives: %d", lives);
+      DrawText(lives_text,
+               kScreenWidth - MeasureText(lives_text, kHudFontSize) - 10, 10,
+               kHudFontSize, WHITE);
+
+      switch (state) {
+        case GameState::kTitle:
+        case GameState::kPlaying:
+          // No message: the title has its own screen above, and during play
+          // the field stays clear. Two `case` labels in a row share one body.
+          break;
+        case GameState::kPaused:
+          DrawCenteredText("PAUSED", 220, 40, WHITE);
+          DrawCenteredText("Press P to resume", 280, kHudFontSize, GRAY);
+          break;
+        case GameState::kGameOver:
+          DrawCenteredText("GAME OVER", 220, 40, RED);
+          DrawCenteredText(TextFormat("Final score: %d", score), 280,
+                           kHudFontSize, WHITE);
+          DrawCenteredText("Press SPACE to play again", 320, kHudFontSize,
+                           GRAY);
+          break;
+        case GameState::kLevelCleared:
+          DrawCenteredText("LEVEL CLEARED", 220, 40, GREEN);
+          DrawCenteredText(TextFormat("Score: %d", score), 280, kHudFontSize,
+                           WHITE);
+          DrawCenteredText("Press SPACE for the next level", 320, kHudFontSize,
+                           GRAY);
+          break;
+      }
     }
 
     DrawFPS(10, kScreenHeight - 25);
